@@ -3,8 +3,8 @@ import fetch from 'node-fetch';
 
 export default async function handler(req, res) {
   // Use the actual environment variable names from Vercel
-  const clientId = process.env.Clientid;
-  const secret = process.env.secret;
+  const clientId = process.env.AYb8FfXzrPCKiyxXzGtyGDiK4OouKRF3NEmyCIB3WdxsDQBICOcq5dGQUblS0oVa5RFPazOPJk7PUqIC;
+  const secret = process.env.ECMbpOpCG0DjbM6TAgQ6cy9mtR1WzetLGpdfItv35B7GXyCZEqLwSQb_hlnjgbTYnD3XkVoZ06rrcEmB;
   
   const { amount, description } = req.query;
 
@@ -73,3 +73,4 @@ export default async function handler(req, res) {
     });
   }
 }
+
