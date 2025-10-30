@@ -1,15 +1,17 @@
 import { Buffer } from 'buffer';
-import fetch from 'node-fetch';
+import fetch from 'node-fetch'; // Kept for compatibility with older Vercel/Node runtimes
 
 export default async function handler(req, res) {
-  // Use the actual environment variable names from Vercel
-  const clientId = process.env.AYb8FfXzrPCKiyxXzGtyGDiK4OouKRF3NEmyCIB3WdxsDQBICOcq5dGQUblS0oVa5RFPazOPJk7PUqIC;
-  const secret = process.env.ECMbpOpCG0DjbM6TAgQ6cy9mtR1WzetLGpdfItv35B7GXyCZEqLwSQb_hlnjgbTYnD3XkVoZ06rrcEmB;
+  // CRITICAL FIX: The Vercel key appears to be 'ClientId' (capital 'I'),
+  // but the code used 'Clientid' (lowercase 'i'). Case must match exactly.
+  const clientId = process.env.ClientId; 
+  const secret = process.env.secret;
   
   const { amount, description } = req.query;
 
   if (!clientId || !secret) {
-    return res.status(500).json({ error: "Configuration Error: Clientid or secret environment variables are missing." });
+    // This configuration error should now be fixed with the case correction above.
+    return res.status(500).json({ error: "Configuration Error: ClientId or secret environment variables are missing." });
   }
 
   if (!amount || !description) {
@@ -19,10 +21,12 @@ export default async function handler(req, res) {
   // Ensure amount is a string with two decimal places for PayPal
   const formattedAmount = parseFloat(amount).toFixed(2);
   
-  // Basic Auth header generation: Base64 encode 'Clientid:secret'
+  // Basic Auth header generation: Base64 encode 'ClientId:secret'
   const auth = Buffer.from(`${clientId}:${secret}`).toString('base64');
 
   // 1. Create order on PayPal Sandbox API
+  // NOTE: If you receive 'invalid_client' error, ensure these credentials (ClientId/secret) 
+  // are the *Sandbox* keys, as you are using the *sandbox* URL below.
   const response = await fetch("https://api-m.sandbox.paypal.com/v2/checkout/orders", {
     method: "POST",
     headers: {
@@ -73,4 +77,3 @@ export default async function handler(req, res) {
     });
   }
 }
-
