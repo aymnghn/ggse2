@@ -1,78 +1,103 @@
+import { parse } from 'url';
 import { Buffer } from 'buffer';
-import fetch from 'node-fetch'; // Kept for compatibility with older Vercel/Node runtimes
+import fetch from 'node-fetch';
+
+// *** CRITICAL CHANGE: Set base URL to LIVE API ***
+const PAYPAL_BASE_URL = 'https://api.paypal.com';
 
 export default async function handler(req, res) {
-  // CRITICAL FIX: The Vercel key appears to be 'ClientId' (capital 'I'),
-  // but the code used 'Clientid' (lowercase 'i'). Case must match exactly.
-  const clientId = process.env.ClientId; 
-  const secret = process.env.secret;
-  
-  const { amount, description } = req.query;
+    const clientId = process.env.ClientId;
+    const secret = process.env.secret;
 
-  if (!clientId || !secret) {
-    // This configuration error should now be fixed with the case correction above.
-    return res.status(500).json({ error: "Configuration Error: ClientId or secret environment variables are missing." });
-  }
+    if (!clientId || !secret) {
+        return res.status(500).json({ error: 'Configuration Error: ClientId or secret environment variables are missing.' });
+    }
 
-  if (!amount || !description) {
-    return res.status(400).json({ error: "Missing required query parameters: amount and description." });
-  }
+    // 1. Get Access Token (Required for all V2 API calls)
+    const authString = Buffer.from(`${clientId}:${secret}`).toString('base64');
+    
+    let accessToken;
+    try {
+        // *** CRITICAL FIX: Token endpoint must use the LIVE URL ***
+        const tokenResponse = await fetch(`${PAYPAL_BASE_URL}/v1/oauth2/token`, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Basic ${authString}`,
+                'Content-Type': 'application/x-www-form-urlencoded'
+            },
+            body: 'grant_type=client_credentials'
+        });
 
-  // Ensure amount is a string with two decimal places for PayPal
-  const formattedAmount = parseFloat(amount).toFixed(2);
-  
-  // Basic Auth header generation: Base64 encode 'ClientId:secret'
-  const auth = Buffer.from(`${clientId}:${secret}`).toString('base64');
+        if (!tokenResponse.ok) {
+            const error = await tokenResponse.json();
+            console.error('PayPal Token Error (LIVE):', error);
+            // This error often means invalid Live ClientID/Secret
+            throw new Error('Failed to obtain access token (Check Vercel Live Credentials).');
+        }
 
-  // 1. Create order on PayPal LIVE API
-  // *** THIS IS THE CRITICAL LINE CHANGE ***
-  const response = await fetch("https://api-m.paypal.com/v2/checkout/orders", {
-    method: "POST",
-    headers: {
-      "Authorization": `Basic ${auth}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      intent: "CAPTURE",
-      purchase_units: [
-        {
-          amount: { currency_code: "USD", value: formattedAmount },
-          description: description || "Product Purchase"
-        }
-      ],
-      application_context: {
-        // You MUST use the full Vercel URL for the redirect and status endpoints
-        // Using a placeholder for your app's actual Vercel domain
-        return_url: `https://ggsels.vercel.app/api/order-status`, 
-        cancel_url: `https://ggsels.vercel.app/cancel`,
-        brand_name: 'GGSel Payment Gateway', // Optional: customize the checkout page
-        landing_page: 'NO_PREFERENCE',
-        user_action: 'PAY_NOW'
-      }
-    })
-  });
+        const tokenData = await tokenResponse.json();
+        accessToken = tokenData.access_token;
 
-  const data = await response.json();
+    } catch (error) {
+        console.error('Authentication or Token Fetch Error:', error);
+        return res.status(500).json({ error: 'Failed to authenticate with PayPal: ' + error.message });
+    }
+    
+    // Parse URL Parameters
+    const { query } = parse(req.url, true);
+    const amount = query.amount || '1.00';
+    const description = query.description || 'Digital Product Purchase';
 
-  if (response.ok && data.id) {
-    // 2. Find the approval link to redirect the user
-    const approveLink = data.links.find(link => link.rel === 'approve');
-    
-    if (approveLink) {
-      // 3. Redirect the user's browser to the PayPal payment page (302)
-      console.log(`Order created. Redirecting to: ${approveLink.href}`);
-      res.writeHead(302, { Location: approveLink.href });
-      return res.end();
-    } else {
-      console.error('PayPal Response Missing Approve Link:', data);
-      return res.status(500).json({ error: "Order created, but missing payment approval link." });
-    }
-  } else {
-    // Handle PayPal API errors (e.g., INVALID_CLIENT or validation errors)
-    console.error('PayPal API Error:', data);
-    return res.status(response.status).json({ 
-      error: data.name || "PayPal API Error", 
-      details: data.message || "Failed to create order." 
-    });
-  }
+    // 2. Create Order Request (using the acquired Access Token)
+    const orderPayload = {
+        intent: 'CAPTURE',
+        purchase_units: [{
+            amount: {
+                currency_code: 'USD',
+                value: parseFloat(amount).toFixed(2),
+            },
+            description: description
+        }],
+        application_context: {
+            // These URLs should be correct
+            return_url: `https://ggsels.vercel.app/api/order-status`, 
+            cancel_url: `https://ggsels.vercel.app/failure?message=Canceled`, 
+            brand_name: 'GGSel Payment Gateway',
+            user_action: 'PAY_NOW'
+        },
+    };
+
+    try {
+        // *** Order creation endpoint must use the LIVE URL ***
+        const orderResponse = await fetch(`${PAYPAL_BASE_URL}/v2/checkout/orders`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${accessToken}`, // Use the Bearer token here
+            },
+            body: JSON.stringify(orderPayload),
+        });
+
+        if (!orderResponse.ok) {
+            const error = await orderResponse.json();
+            console.error('PayPal Order Creation Error (LIVE):', error);
+            throw new Error('Failed to create order. Check PayPal settings or API logs.');
+        }
+
+        const orderData = await orderResponse.json();
+        
+        // 3. Redirect to PayPal Approval Link
+        const approvalLink = orderData.links.find(link => link.rel === 'approve');
+        
+        if (approvalLink) {
+            res.writeHead(302, { Location: approvalLink.href });
+            res.end();
+        } else {
+            return res.status(500).json({ error: 'PayPal did not return an approval link.' });
+        }
+
+    } catch (error) {
+        console.error('Order Creation/Redirect Error:', error);
+        return res.status(500).json({ error: 'PayPal API Error', details: error.message });
+    }
 }
